@@ -1,17 +1,9 @@
 
 /*
-  An example showing rainbow colours on a 1.8" TFT LCD screen
-  and to show a basic example of font use.
-
-  Make sure all the display driver and pin connections are correct by
-  editing the User_Setup.h file in the TFT_eSPI library folder.
-
-  Note that yield() or delay(0) must be called in long duration for/while
-  loops to stop the ESP8266 watchdog triggering.
-
-  #########################################################################
-  ###### DON'T FORGET TO UPDATE THE User_Setup.h FILE IN THE LIBRARY ######
-  #########################################################################
+  Version 0.5
+  PressureDisplay.ino
+  Display simulated pressure readings on T-Display-S3 with a bar graph and min/max values.
+  Press the user button (IO14) to reset min/max.
 */
 
 #include <TFT_eSPI.h> // Graphics and font library for ST7735 driver chip
@@ -20,7 +12,11 @@
 // Include converted image data (8bpp with 256-entry RGB palette)
 #include "fh_logo.c"
 
+#define REFRESH_MS 40  // refresh interval in milliseconds
 
+#define PRESSURE_CLAMPED 5
+#define PRESSURE_UNCLAMPED 140
+#define PRESSURE_OVER 155
 
 TFT_eSPI tft = TFT_eSPI();  // Invoke library, pins defined in User_Setup.h
 
@@ -31,16 +27,71 @@ byte blue = 0;
 byte state = 0;
 unsigned int colour = red << 11;
 uint32_t runing = 0;
-float randPressure = 1; // Declare randPressure as a global variable
+float pressure = -10; // Declare randPressure as a global variable
+float max_pressure = 0;
+float min_pressure = 999;
+// Button (IO14) used to reset min/max
+const uint8_t PIN_BTN_IO14 = 14; // user button IO14 (active LOW)
+// debounce state
+bool btnLastState = HIGH;
+unsigned long btnLastChange = 0;
+unsigned long btnPressedAt = 0;
+const unsigned long DEBOUNCE_MS = 30;
+const unsigned long LONGPRESS_MS = 1000; // not used, but available
 
+// Bar graph settings
+const int BAR_HEIGHT = 30;     // lowest 30 pixels
+const float BAR_MAX = 175.0;   // bar graph max mapping
+const int barY = 170 - BAR_HEIGHT; // Y position of the bar
+
+// Draw a horizontal bar at the bottom of the screen representing pressure
+// Minimal-update implementation: border drawn once in setup(), this updates
+// only the inner area to avoid flicker.
+void drawPressureBar(float p)
+{
+  int screenW = tft.width();
+  int screenH = tft.height();
+  int y = screenH - BAR_HEIGHT;
+
+  // inner area (leave 1px border intact)
+  int ix = 1;
+  int iy = y + 1;
+  int iW = screenW - 2;
+  int iH = BAR_HEIGHT - 2;
+
+  // Clamp pressure to 0..BAR_MAX
+  float pc = p;
+  if (pc < 0.0) pc = 0.0;
+  if (pc > BAR_MAX) pc = BAR_MAX;
+
+  // Compute inner width in pixels
+  int innerBarW = (int)((pc / BAR_MAX) * (float)iW + 0.5);
+
+  static int prevInnerW = -1;
+  uint32_t bar_color = TFT_SKYBLUE;
+  if (prevInnerW < 0) {
+    // first-time init: clear inner background and draw initial bar
+    tft.fillRect(ix, iy, iW, iH-1, TFT_BLACK);
+    if (innerBarW > 0) tft.fillRect(ix, iy, innerBarW, iH-1, bar_color);
+  } else if (innerBarW > prevInnerW) {
+    // bar grew: draw only the newly exposed area
+    tft.fillRect(ix + prevInnerW, iy, innerBarW - prevInnerW, iH-1, bar_color);
+  } else if (innerBarW < prevInnerW) {
+    // bar shrank: erase only the removed area
+    tft.fillRect(ix + innerBarW, iy, prevInnerW - innerBarW, iH-1, TFT_BLACK);
+  }
+
+  prevInnerW = innerBarW;
+}
 void setup(void)
 {
-  
- 
-  Serial.begin(115200);
+  //Serial.begin(115200);
 
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
+
+  // Initialize user button IO14 (internal pullup, active LOW)
+  pinMode(PIN_BTN_IO14, INPUT_PULLUP);
 
   tft.init();
   tft.setRotation(3); // tole bomo potem dali na 1
@@ -69,75 +120,118 @@ void setup(void)
     // Some examples set swap bytes when using data from converters
     tft.setSwapBytes(true);
     uint16_t lineBuf[imgW];
+    const int imgX = 0;      // left edge
+    const int imgY = 15;     // shift image down by 20 pixels
     for (int row = 0; row < imgH; ++row) {
       const uint8_t *prow = pixels + row * imgW;
       for (int col = 0; col < imgW; ++col) {
         uint8_t idx = pgm_read_byte(prow + col);
         lineBuf[col] = cmap[idx];
       }
-      // push single line
-      tft.pushImage(0, row, imgW, 1, lineBuf);
+      // push single line at offset Y = row + imgY
+      tft.pushImage(imgX, row + imgY, imgW, 1, lineBuf);
     }
     tft.setSwapBytes(false);
   }
 
-  targetTime = millis() + 1000;
+    // Draw static border for the bar area once (avoid redrawing border every frame)
+    {
+      int screenW = tft.width();
+      int screenH = tft.height();
+      int by = screenH - BAR_HEIGHT;
+      tft.drawRect(0, by, screenW, BAR_HEIGHT, TFT_LIGHTGREY);
+      // DRAW 150 bar mark
+      int x150 = (int)((150.0 / BAR_MAX) * (float)(screenW - 2) + 0.5) + 1;
+      tft.fillTriangle(x150 - 3, by - 15, x150 + 3, by - 15, x150, by-1, TFT_WHITE);
+    }
+
+    targetTime = millis() + 100;
 }
 
 void loop()
 {
 
-  if (millis() > runing) {
-    Serial.print("Current running ");
-    Serial.print(millis());
-    Serial.println(" millis");
-    runing = millis() + 5000;
-  }
+  // if (millis() > runing) {
+  //   Serial.print("Current running ");
+  //   Serial.print(millis());
+  //   Serial.println(" millis");
+  //   runing = millis() + 5000;
+  // }
   if (targetTime < millis()) {
-    targetTime = millis() + 50;
+    targetTime = millis() + REFRESH_MS;
+    // ===============================================================================
+    // pressure = 0.00 + (float)random(0,2000)/10; // random integer [0..200]
+    pressure = pressure + 1.1;
+    if (pressure > 200.00) pressure = -10.00;
+    // ===============================================================================
+    if (pressure > max_pressure) max_pressure = pressure;
+    if (pressure < min_pressure) min_pressure = pressure;
+    
+    // Draw pressure bar at bottom of screen (0..175 mapped to full width)
+    drawPressureBar(pressure);
+
+    // --- Button handling: IO14 resets min/max on press-release ---
+    int rawBtn = digitalRead(PIN_BTN_IO14);
+    if (rawBtn != btnLastState) {
+      btnLastChange = millis();
+      btnLastState = rawBtn;
+    }
+    if (millis() - btnLastChange > DEBOUNCE_MS) {
+      // stable state
+      static bool btnStableLast = HIGH;
+      if (rawBtn != btnStableLast) {
+        btnStableLast = rawBtn;
+        if (btnStableLast == LOW) {
+          // pressed
+          btnPressedAt = millis();
+        } else {
+          // released -> treat as a short press (reset min/max)
+          // Reset min and max values
+          max_pressure = 0;
+          min_pressure = 999;
+          // Provide visual feedback: quickly flash a message
+          //tft.fillRect(10, 140, 150, 24, TFT_BLACK);
+          //tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+          //tft.drawString("Min/Max reset", 12, 140, 2);
+          // short delay so user sees feedback (non-blocking-ish)
+          // We'll let the normal loop timing clear/update the display next frame
+        }
+      }
+    }
+
+    int xpos = 75;      // x position
+    int ypos = 10;      // y position
+    int font = 8;       // font number only 2,4,6,7 valid. Font 6 contains digits
 
 
-    // The standard ADAFruit font still works as before
     tft.setTextColor(TFT_WHITE,TFT_BLACK);
-    // tft.setCursor (12, 5);
-    // tft.print("Original ADAfruit font!");
+    
+    xpos += tft.drawFloat(pressure, 1, xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
+    xpos += tft.drawString("    ",  xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
 
-    // The new larger fonts do not use the .setCursor call, coords are embedded
-    // tft.setTextColor(TFT_BLACK, TFT_BLACK); // Do not plot the background colour
-
-    // Overlay the black text on top of the rainbow plot (the advantage of not drawing the backgorund colour!)
-    // tft.drawCentreString("Font size 2", 80, 14, 2); // Draw text centre at position 80, 12 using font 2
-
-    //tft.drawCentreString("Font size 2",81,12,2); // Draw text centre at position 80, 12 using font 2
-
-    // tft.drawCentreString("bar", 80, 30, 4); // Draw text centre at position 80, 24 using font 4
-
-    // tft.drawCentreString("12345678", 80, 54, 4); // Draw text centre at position 80, 24 using font 6
-
-    // tft.drawCentreString("12.34 is in font size 6", 80, 92, 2); // Draw text centre at position 80, 90 using font 2
-
-    // Note the x position is the top left of the font!
-  
-  
-  //float randPressure = 100.00 + (float)random(0,200)/100; // random integer [0..200]
-  randPressure = randPressure + 0.1;
-  if (randPressure > 200.00) randPressure = 0.00;
-
-  // draw a random integer between 0 and 200
-  int xpos = 50;      // x position
-  int ypos = 90;      // y position
-  int font = 6;       // font number only 2,4,6,7 valid. Font 6 contains digits
-
-  // Compute the bounding box for the numeric text and unit so we can clear it
-  // Use fontHeight() to get line height for the fonts used
-  int16_t numH = tft.fontHeight(font);
-  // Estimate number width: drawNumber will return the delta (width) so we can compute after drawing
-  // Clear area behind previous number+unit: choose a conservative width (e.g., 120 px)
-  int clearW = 135;
-  int clearH = max(numH, tft.fontHeight(4));
-  //tft.fillRect(xpos - 2, ypos - 2, clearW, clearH + 4, TFT_BLACK);
-  xpos += tft.drawFloat(randPressure, 1, xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
-  tft.drawString(" bar", 180, ypos+18, 4); // Continue printing from new x position
+    xpos = 10; ypos = 95;
+    xpos += tft.drawString("Max: ",  xpos, ypos, 2);
+    xpos += tft.drawFloat(max_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
+    xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
+    xpos = 10; ypos = 115;
+    xpos += tft.drawString("Min: ",  xpos, ypos, 2);
+    xpos += tft.drawFloat(min_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
+    xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
+    
+    xpos = 140; ypos = 100;
+    if (pressure < PRESSURE_CLAMPED) {
+      tft.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
+      tft.drawString("CLAMPED        ", xpos, ypos, 4);
+    } else if (pressure > PRESSURE_OVER) {
+      tft.setTextColor(TFT_RED, TFT_BLACK);
+      tft.drawString("OVERLOAD    ", xpos, ypos, 4);
+    } else if (pressure >= PRESSURE_UNCLAMPED && pressure <= PRESSURE_OVER) {
+      tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+      tft.drawString("UNCLAMPED    ", xpos, ypos, 4);
+    } else {
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString("                             ", xpos, ypos, 4);
+    }
   }
 }
 
