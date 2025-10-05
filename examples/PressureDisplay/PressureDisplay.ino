@@ -17,6 +17,8 @@
 #include <TFT_eSPI.h> // Graphics and font library for ST7735 driver chip
 #include <SPI.h>
 #include "pin_config.h"
+// Include converted image data (8bpp with 256-entry RGB palette)
+#include "fh_logo.c"
 
 
 
@@ -29,22 +31,55 @@ byte blue = 0;
 byte state = 0;
 unsigned int colour = red << 11;
 uint32_t runing = 0;
+float randPressure = 1; // Declare randPressure as a global variable
 
 void setup(void)
 {
+  
+ 
   Serial.begin(115200);
 
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
 
   tft.init();
-  tft.setRotation(3); // tole?
+  tft.setRotation(3); // tole bomo potem dali na 1
   tft.fillScreen(TFT_BLACK);
 
+  // Draw pre-converted fh_logo in the upper-left corner
+  // fh_logo.c layout: 8 byte header, 256*3 bytes RGB palette, then width*height bytes of 8bpp indices
+  {
+    // Read width/height from header (little endian)
+    uint16_t imgW = (uint16_t)gImage_fh_logo[2] | ((uint16_t)gImage_fh_logo[3] << 8);
+    uint16_t imgH = (uint16_t)gImage_fh_logo[4] | ((uint16_t)gImage_fh_logo[5] << 8);
+    const uint8_t *palette = &gImage_fh_logo[8];
+    const uint8_t *pixels = &gImage_fh_logo[8 + 256 * 3];
 
-  // tft.fillScreen(TFT_RED); delay(1000);
-  // tft.fillScreen(TFT_GREEN); delay(1000);
-  // tft.fillScreen(TFT_BLUE); delay(1000);
+    // Build 16-bit colour map (RGB888 -> RGB565) in RAM
+    static uint16_t cmap[256];
+    for (int i = 0; i < 256; ++i) {
+      uint8_t r = pgm_read_byte(&palette[i * 3 + 0]);
+      uint8_t g = pgm_read_byte(&palette[i * 3 + 1]);
+      uint8_t b = pgm_read_byte(&palette[i * 3 + 2]);
+      uint16_t c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+      cmap[i] = c;
+    }
+
+    // Push image by converting each row to 16-bit and sending it
+    // Some examples set swap bytes when using data from converters
+    tft.setSwapBytes(true);
+    uint16_t lineBuf[imgW];
+    for (int row = 0; row < imgH; ++row) {
+      const uint8_t *prow = pixels + row * imgW;
+      for (int col = 0; col < imgW; ++col) {
+        uint8_t idx = pgm_read_byte(prow + col);
+        lineBuf[col] = cmap[idx];
+      }
+      // push single line
+      tft.pushImage(0, row, imgW, 1, lineBuf);
+    }
+    tft.setSwapBytes(false);
+  }
 
   targetTime = millis() + 1000;
 }
@@ -56,90 +91,53 @@ void loop()
     Serial.print("Current running ");
     Serial.print(millis());
     Serial.println(" millis");
-    runing = millis() + 1000;
+    runing = millis() + 5000;
   }
   if (targetTime < millis()) {
-    targetTime = millis() + 10000;
+    targetTime = millis() + 50;
 
-    // Colour changing state machine
-    for (int i = 0; i < tft.width(); i++) {
-      tft.drawFastVLine(i, 0, tft.height(), colour);
-      switch (state) {
-      case 0:
-        green += 2;
-        if (green == 64) {
-          green = 63;
-          state = 1;
-        }
-        break;
-      case 1:
-        red--;
-        if (red == 255) {
-          red = 0;
-          state = 2;
-        }
-        break;
-      case 2:
-        blue ++;
-        if (blue == 32) {
-          blue = 31;
-          state = 3;
-        }
-        break;
-      case 3:
-        green -= 2;
-        if (green == 255) {
-          green = 0;
-          state = 4;
-        }
-        break;
-      case 4:
-        red ++;
-        if (red == 32) {
-          red = 31;
-          state = 5;
-        }
-        break;
-      case 5:
-        blue --;
-        if (blue == 255) {
-          blue = 0;
-          state = 0;
-        }
-        break;
-      }
-      colour = red << 11 | green << 5 | blue;
-    }
 
     // The standard ADAFruit font still works as before
-    tft.setTextColor(TFT_BLACK);
-    tft.setCursor (12, 5);
-    tft.print("Original ADAfruit font!");
+    tft.setTextColor(TFT_WHITE,TFT_BLACK);
+    // tft.setCursor (12, 5);
+    // tft.print("Original ADAfruit font!");
 
     // The new larger fonts do not use the .setCursor call, coords are embedded
-    tft.setTextColor(TFT_BLACK, TFT_BLACK); // Do not plot the background colour
+    // tft.setTextColor(TFT_BLACK, TFT_BLACK); // Do not plot the background colour
 
     // Overlay the black text on top of the rainbow plot (the advantage of not drawing the backgorund colour!)
-    tft.drawCentreString("Font size 2", 80, 14, 2); // Draw text centre at position 80, 12 using font 2
+    // tft.drawCentreString("Font size 2", 80, 14, 2); // Draw text centre at position 80, 12 using font 2
 
     //tft.drawCentreString("Font size 2",81,12,2); // Draw text centre at position 80, 12 using font 2
 
-    tft.drawCentreString("Font size 4", 80, 30, 4); // Draw text centre at position 80, 24 using font 4
+    // tft.drawCentreString("bar", 80, 30, 4); // Draw text centre at position 80, 24 using font 4
 
-    tft.drawCentreString("12345678", 80, 54, 4); // Draw text centre at position 80, 24 using font 6
+    // tft.drawCentreString("12345678", 80, 54, 4); // Draw text centre at position 80, 24 using font 6
 
-    tft.drawCentreString("12.34 is in font size 6", 80, 92, 2); // Draw text centre at position 80, 90 using font 2
+    // tft.drawCentreString("12.34 is in font size 6", 80, 92, 2); // Draw text centre at position 80, 90 using font 2
 
     // Note the x position is the top left of the font!
+  
+  
+  //float randPressure = 100.00 + (float)random(0,200)/100; // random integer [0..200]
+  randPressure = randPressure + 0.1;
+  if (randPressure > 200.00) randPressure = 0.00;
 
-    // draw a floating point number
-    float pi = 3.14159; // Value to print
-    int precision = 3;  // Number of digits after decimal point
-    int xpos = 50;      // x position
-    int ypos = 110;     // y position
-    int font = 2;       // font number only 2,4,6,7 valid. Font 6 only contains characters [space] 0 1 2 3 4 5 6 7 8 9 0 : a p m
-    xpos += tft.drawFloat(pi, precision, xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
-    tft.drawString(" is pi", xpos, ypos, font); // Continue printing from new x position
+  // draw a random integer between 0 and 200
+  int xpos = 50;      // x position
+  int ypos = 90;      // y position
+  int font = 6;       // font number only 2,4,6,7 valid. Font 6 contains digits
+
+  // Compute the bounding box for the numeric text and unit so we can clear it
+  // Use fontHeight() to get line height for the fonts used
+  int16_t numH = tft.fontHeight(font);
+  // Estimate number width: drawNumber will return the delta (width) so we can compute after drawing
+  // Clear area behind previous number+unit: choose a conservative width (e.g., 120 px)
+  int clearW = 135;
+  int clearH = max(numH, tft.fontHeight(4));
+  //tft.fillRect(xpos - 2, ypos - 2, clearW, clearH + 4, TFT_BLACK);
+  xpos += tft.drawFloat(randPressure, 1, xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
+  tft.drawString(" bar", 180, ypos+18, 4); // Continue printing from new x position
   }
 }
 
