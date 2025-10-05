@@ -11,10 +11,12 @@
 #include "pin_config.h"
 // Include converted image data (8bpp with 256-entry RGB palette)
 #include "fh_logo.c"
+// splash logo (8bpp converter output) - add a file named splash_logo.c to the sketch folder
+#include "splash_logo.c"
 
 #define REFRESH_MS 40  // refresh interval in milliseconds
 
-#define PRESSURE_CLAMPED 5
+#define PRESSURE_CLAMPED 7
 #define PRESSURE_UNCLAMPED 140
 #define PRESSURE_OVER 155
 
@@ -47,6 +49,14 @@ const int barY = 170 - BAR_HEIGHT; // Y position of the bar
 // Draw a horizontal bar at the bottom of the screen representing pressure
 // Minimal-update implementation: border drawn once in setup(), this updates
 // only the inner area to avoid flicker.
+bool blink()
+{
+  if (millis() % 300 < 150)
+    return true;
+  else
+    return false;
+}
+
 void drawPressureBar(float p)
 {
   int screenW = tft.width();
@@ -83,6 +93,50 @@ void drawPressureBar(float p)
 
   prevInnerW = innerBarW;
 }
+
+// Helper to draw a 16-bit RGB565 image stored as little-endian words after an 8-byte header
+void draw16bppImage(const uint8_t *img, int destX, int destY)
+{
+  uint16_t imgW = (uint16_t)img[2] | ((uint16_t)img[3] << 8);
+  uint16_t imgH = (uint16_t)img[4] | ((uint16_t)img[5] << 8);
+  const uint8_t *pixels = &img[8]; // expected layout: 2 bytes per pixel, little-endian (lo,hi)
+
+  tft.setSwapBytes(true); // ensure correct byte order for pushImage
+  // allocate line buffer on stack; if width is large consider static allocation
+  uint16_t lineBuf[imgW];
+  for (int row = 0; row < imgH; ++row) {
+    const uint8_t *prow = pixels + row * imgW * 2;
+    for (int col = 0; col < imgW; ++col) {
+      uint16_t lo = pgm_read_byte(prow + col * 2);
+      uint16_t hi = pgm_read_byte(prow + col * 2 + 1);
+      lineBuf[col] = (hi << 8) | lo; // reconstruct little-endian 16-bit pixel
+    }
+    tft.pushImage(destX, destY + row, imgW, 1, lineBuf);
+  }
+  tft.setSwapBytes(false);
+}
+
+// Show splash screen using splash_logo.c for 2 seconds
+void showSplash()
+{
+  tft.fillScreen(TFT_BLACK);
+  // center the splash image
+  uint16_t w = (uint16_t)gImage_splash_logo[2] | ((uint16_t)gImage_splash_logo[3] << 8);
+  uint16_t h = (uint16_t)gImage_splash_logo[4] | ((uint16_t)gImage_splash_logo[5] << 8);
+  int x = (tft.width() - w) / 2;
+  int y = (tft.height() - h) / 2 - 20; // lift a bit to make room for text
+  draw16bppImage((const uint8_t *)gImage_splash_logo, x, y);
+
+  // draw text below image
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.drawCentreString("Hexapod pressure indicator", tft.width() / 2, y + h + 6, 2);
+  tft.drawCentreString("FW: v1.0", tft.width() / 2, y + h + 22, 2);
+
+  delay(2000);
+  // clear splash area (simple full-screen clear; setup will redraw UI)
+  tft.fillScreen(TFT_BLACK);
+}
 void setup(void)
 {
   //Serial.begin(115200);
@@ -95,43 +149,17 @@ void setup(void)
 
   tft.init();
   tft.setRotation(3); // tole bomo potem dali na 1
+
+  showSplash();
+
   tft.fillScreen(TFT_BLACK);
 
-  // Draw pre-converted fh_logo in the upper-left corner
+  // Draw pre-converted fh_logo in the upper-left corner using helper
   // fh_logo.c layout: 8 byte header, 256*3 bytes RGB palette, then width*height bytes of 8bpp indices
   {
-    // Read width/height from header (little endian)
-    uint16_t imgW = (uint16_t)gImage_fh_logo[2] | ((uint16_t)gImage_fh_logo[3] << 8);
-    uint16_t imgH = (uint16_t)gImage_fh_logo[4] | ((uint16_t)gImage_fh_logo[5] << 8);
-    const uint8_t *palette = &gImage_fh_logo[8];
-    const uint8_t *pixels = &gImage_fh_logo[8 + 256 * 3];
-
-    // Build 16-bit colour map (RGB888 -> RGB565) in RAM
-    static uint16_t cmap[256];
-    for (int i = 0; i < 256; ++i) {
-      uint8_t r = pgm_read_byte(&palette[i * 3 + 0]);
-      uint8_t g = pgm_read_byte(&palette[i * 3 + 1]);
-      uint8_t b = pgm_read_byte(&palette[i * 3 + 2]);
-      uint16_t c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-      cmap[i] = c;
-    }
-
-    // Push image by converting each row to 16-bit and sending it
-    // Some examples set swap bytes when using data from converters
-    tft.setSwapBytes(true);
-    uint16_t lineBuf[imgW];
     const int imgX = 0;      // left edge
     const int imgY = 15;     // shift image down by 20 pixels
-    for (int row = 0; row < imgH; ++row) {
-      const uint8_t *prow = pixels + row * imgW;
-      for (int col = 0; col < imgW; ++col) {
-        uint8_t idx = pgm_read_byte(prow + col);
-        lineBuf[col] = cmap[idx];
-      }
-      // push single line at offset Y = row + imgY
-      tft.pushImage(imgX, row + imgY, imgW, 1, lineBuf);
-    }
-    tft.setSwapBytes(false);
+    draw16bppImage((const uint8_t *)gImage_fh_logo, imgX, imgY);
   }
 
     // Draw static border for the bar area once (avoid redrawing border every frame)
@@ -161,7 +189,7 @@ void loop()
     targetTime = millis() + REFRESH_MS;
     // ===============================================================================
     // pressure = 0.00 + (float)random(0,2000)/10; // random integer [0..200]
-    pressure = pressure + 1.1;
+    pressure = pressure + 0.6;
     if (pressure > 200.00) pressure = -10.00;
     // ===============================================================================
     if (pressure > max_pressure) max_pressure = pressure;
@@ -218,19 +246,19 @@ void loop()
     xpos += tft.drawFloat(min_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
     xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
     
-    xpos = 140; ypos = 100;
+    xpos = 130; ypos = 100;
     if (pressure < PRESSURE_CLAMPED) {
       tft.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
-      tft.drawString("CLAMPED        ", xpos, ypos, 4);
-    } else if (pressure > PRESSURE_OVER) {
+      tft.drawString("CLAMPED          ", xpos, ypos, 4);
+    } else if (pressure > PRESSURE_OVER && blink()) {
       tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.drawString("OVERLOAD    ", xpos, ypos, 4);
-    } else if (pressure >= PRESSURE_UNCLAMPED && pressure <= PRESSURE_OVER) {
+      tft.drawString("OVERLOAD        ", xpos, ypos, 4);
+    } else if (pressure >= PRESSURE_UNCLAMPED && pressure <= PRESSURE_OVER && blink()) {
       tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-      tft.drawString("UNCLAMPED    ", xpos, ypos, 4);
+      tft.drawString("UNCLAMPED    " , xpos, ypos, 4);
     } else {
       tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-      tft.drawString("                             ", xpos, ypos, 4);
+      tft.drawString("                                  ", xpos, ypos, 4);
     }
   }
 }
