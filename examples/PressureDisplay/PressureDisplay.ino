@@ -8,6 +8,7 @@
 
 #include <TFT_eSPI.h> // Graphics and font library for ST7735 driver chip
 #include <SPI.h>
+#include <Wire.h>
 #include "pin_config.h"
 // Include converted image data (8bpp with 256-entry RGB palette)
 #include "fh_logo.c"
@@ -45,6 +46,92 @@ const unsigned long LONGPRESS_MS = 1000; // not used, but available
 const int BAR_HEIGHT = 30;     // lowest 30 pixels
 const float BAR_MAX = 175.0;   // bar graph max mapping
 const int barY = 170 - BAR_HEIGHT; // Y position of the bar
+
+// --- ADS1115 I2C configuration and helper functions -----------------------
+// I2C pins for ESP32-S3
+const int I2C_SDA_PIN = 18;
+const int I2C_SCL_PIN = 17;
+// ADS1115 default I2C address
+const uint8_t ADS1115_ADDR = 0x48;
+// ADS1115 registers
+const uint8_t ADS_REG_CONVERSION = 0x00;
+const uint8_t ADS_REG_CONFIG = 0x01;
+// Using PGA = +/-4.096V -> LSB = 125uV
+const float ADS1115_LSB = 0.000125f; // volts per bit for +/-4.096V
+
+// Resistor divider: sensor (0-10V) -> divider -> ADS1115 AIN0
+// Top resistor (from sensor output to ADS input) = 75k, bottom resistor (to GND) = 33k
+const float R_TOP = 75000.0f; // ohms
+const float R_BOTTOM = 33000.0f; // ohms
+
+// Sensor mapping: 0..10V -> 0..200 bar
+const float SENSOR_V_MAX = 10.0f; // volts at 200 bar
+const float SENSOR_P_MAX = 200.0f; // bar
+
+// Write a 16-bit register to ADS1115 (MSB first)
+void ads1115WriteRegister(uint8_t reg, uint16_t value)
+{
+  Wire.beginTransmission(ADS1115_ADDR);
+  Wire.write(reg);
+  Wire.write((uint8_t)(value >> 8));
+  Wire.write((uint8_t)(value & 0xFF));
+  Wire.endTransmission();
+}
+
+// Read a 16-bit register from ADS1115 (MSB first)
+int16_t ads1115ReadRegister(uint8_t reg)
+{
+  Wire.beginTransmission(ADS1115_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    // NACK or bus error
+    return INT16_MIN;
+  }
+  Wire.requestFrom((int)ADS1115_ADDR, 2);
+  if (Wire.available() < 2) return INT16_MIN;
+  uint8_t hi = Wire.read();
+  uint8_t lo = Wire.read();
+  return (int16_t)((hi << 8) | lo);
+}
+
+// Perform a single-shot conversion on AIN0 and return measured voltage in volts.
+// Returns NAN on error.
+float readADS1115Voltage()
+{
+  // Build config: start single conversion, MUX = AIN0 single-ended (100), PGA = +/-4.096V (001),
+  // single-shot mode, 128SPS (100), comparator disabled (11)
+  uint16_t config = 0;
+  config |= (1 << 15);            // OS = 1: start single conversion
+  config |= (0b100 << 12);        // MUX = 100 -> AIN0 relative to GND
+  config |= (0b001 << 9);         // PGA = 001 -> +/-4.096V
+  config |= (1 << 8);             // MODE = 1 -> single-shot
+  config |= (0b100 << 5);         // DR = 100 -> 128 SPS
+  config |= 0b11;                 // COMP_QUE = 11 -> disable comparator
+
+  ads1115WriteRegister(ADS_REG_CONFIG, config);
+
+  // Wait for conversion to complete. At 128SPS conversion ~7.8ms, so poll with timeout
+  const unsigned long timeout = 50; // ms
+  unsigned long start = millis();
+  while (millis() - start < timeout) {
+    int16_t cfg = ads1115ReadRegister(ADS_REG_CONFIG);
+    if (cfg == INT16_MIN) break; // bus error
+    if (cfg & (1 << 15)) {
+      // OS bit set -> conversion complete
+      int16_t raw = ads1115ReadRegister(ADS_REG_CONVERSION);
+      if (raw == INT16_MIN) return NAN;
+      // For single-ended reads raw is a positive number (signed 16-bit)
+      float voltage = raw * ADS1115_LSB;
+      return voltage;
+    }
+    delay(2);
+  }
+
+  // Timeout or error: try a final read of conversion register
+  int16_t raw = ads1115ReadRegister(ADS_REG_CONVERSION);
+  if (raw == INT16_MIN) return NAN;
+  return raw * ADS1115_LSB;
+}
 
 // Draw a horizontal bar at the bottom of the screen representing pressure
 // Minimal-update implementation: border drawn once in setup(), this updates
@@ -141,6 +228,9 @@ void setup(void)
 {
   //Serial.begin(115200);
 
+  // Initialize I2C for ADS1115 (SDA=18, SCL=17)
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
 
@@ -174,6 +264,12 @@ void setup(void)
     }
 
     targetTime = millis() + 100;
+
+    // Optional: perform a single ADS1115 read to ensure communication (uncomment to use)
+    // float v = readADS1115Voltage();
+    // if (!isnan(v)) {
+    //   Serial.print("ADS1115 A0 voltage: "); Serial.println(v, 6);
+    // }
 }
 
 void loop()
@@ -189,9 +285,23 @@ void loop()
     targetTime = millis() + REFRESH_MS;
     // ===============================================================================
     // pressure = 0.00 + (float)random(0,2000)/10; // random integer [0..200]
-    pressure = pressure + 0.6;
-    if (pressure > 200.00) pressure = -10.00;
-    // ===============================================================================
+    
+    // pressure = pressure + 0.6;
+    // if (pressure > 200.00) pressure = -10.00;
+    
+    // // ===============================================================================
+    
+    // Read divider output voltage from ADS1115 and convert to sensor input voltage
+    float v_div = readADS1115Voltage(); // measured at divider bottom (to GND)
+    if (isnan(v_div)) {
+      pressure = -999.0; // error reading
+    } else {
+      // Divider relationship: v_div = v_in * (R_BOTTOM / (R_TOP + R_BOTTOM))
+      float v_in = v_div * ((R_TOP + R_BOTTOM) / R_BOTTOM);
+      // Map 0..SENSOR_V_MAX -> 0..SENSOR_P_MAX
+      pressure = (v_in / SENSOR_V_MAX) * SENSOR_P_MAX;
+    }
+    
     if (pressure > max_pressure) max_pressure = pressure;
     if (pressure < min_pressure) min_pressure = pressure;
     
