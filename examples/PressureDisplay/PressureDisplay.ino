@@ -47,7 +47,7 @@ const unsigned long LONGPRESS_MS = 1000; // not used, but available
 // Bar graph settings
 const int BAR_HEIGHT = 30;     // lowest 30 pixels
 const float BAR_MAX = 175.0;   // bar graph max mapping
-const int barY = 170 - BAR_HEIGHT; // Y position of the bar
+const int barY = 130 - BAR_HEIGHT; // Y position of the bar
 
 // --- ADS1115 I2C configuration and helper functions -----------------------
 // I2C pins for ESP32-S3
@@ -150,7 +150,8 @@ void drawPressureBar(float p)
 {
   int screenW = tft.width();
   int screenH = tft.height();
-  int y = screenH - BAR_HEIGHT;
+  // int y = screenH - BAR_HEIGHT;
+  int y = barY;
 
   // inner area (leave 1px border intact)
   int ix = 1;
@@ -260,11 +261,12 @@ void setup(void)
     {
       int screenW = tft.width();
       int screenH = tft.height();
-      int by = screenH - BAR_HEIGHT;
-      tft.drawRect(0, by, screenW, BAR_HEIGHT, TFT_LIGHTGREY);
+      //int by = screenH - BAR_HEIGHT;
+      tft.drawRect(0, barY, screenW, BAR_HEIGHT, TFT_LIGHTGREY);
       // DRAW 150 bar mark
       int x150 = (int)((150.0 / BAR_MAX) * (float)(screenW - 2) + 0.5) + 1;
-      tft.fillTriangle(x150 - 3, by - 15, x150 + 3, by - 15, x150, by-1, TFT_WHITE);
+      tft.fillTriangle(x150 - 3, barY - 11, x150 + 3, barY - 11, x150, barY-1, TFT_YELLOW);
+      tft.fillTriangle(x150 - 3, barY + BAR_HEIGHT + 11, x150 + 3, barY + BAR_HEIGHT + 11, x150, barY + BAR_HEIGHT +1, TFT_YELLOW);
     }
 
     targetTime = millis() + 100;
@@ -355,16 +357,16 @@ void loop()
     xpos += tft.drawFloat(pressure, 1, xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
     xpos += tft.drawString("    ",  xpos, ypos, font); // Draw rounded number and return new xpos delta for next print position
 
-    xpos = 10; ypos = 95;
+    xpos = 10; ypos = 135;
     xpos += tft.drawString("Max: ",  xpos, ypos, 2);
     xpos += tft.drawFloat(max_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
     xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
-    xpos = 10; ypos = 115;
+    xpos = 10; ypos = 152;
     xpos += tft.drawString("Min: ",  xpos, ypos, 2);
     xpos += tft.drawFloat(min_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
     xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
     
-    xpos = 130; ypos = 100;
+    xpos = 130; ypos = 144;
     if (pressure < PRESSURE_CLAMPED) {
       tft.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
       tft.drawString("CLAMPED          ", xpos, ypos, 4);
