@@ -35,6 +35,8 @@ float max_pressure = 0;
 float min_pressure = 999;
 // Button (IO14) used to reset min/max
 const uint8_t PIN_BTN_IO14 = 14; // user button IO14 (active LOW)
+// BOOT button (often labelled BUTTON_1 in pin_config)
+const uint8_t PIN_BTN_BOOT = PIN_BUTTON_1; // usually 0 on the board
 // debounce state
 bool btnLastState = HIGH;
 unsigned long btnLastChange = 0;
@@ -236,6 +238,8 @@ void setup(void)
 
   // Initialize user button IO14 (internal pullup, active LOW)
   pinMode(PIN_BTN_IO14, INPUT_PULLUP);
+  // initialize BOOT button the same way
+  pinMode(PIN_BTN_BOOT, INPUT_PULLUP);
 
   tft.init();
   tft.setRotation(3); // tole bomo potem dali na 1
@@ -309,7 +313,11 @@ void loop()
     drawPressureBar(pressure);
 
     // --- Button handling: IO14 resets min/max on press-release ---
-    int rawBtn = digitalRead(PIN_BTN_IO14);
+    // read both buttons (BOOT and IO14); consider them equivalent
+    int rawBtnA = digitalRead(PIN_BTN_IO14);
+    int rawBtnB = digitalRead(PIN_BTN_BOOT);
+    // collapse to a single logical input (LOW when either is pressed)
+    int rawBtn = (rawBtnA == LOW || rawBtnB == LOW) ? LOW : HIGH;
     if (rawBtn != btnLastState) {
       btnLastChange = millis();
       btnLastState = rawBtn;
