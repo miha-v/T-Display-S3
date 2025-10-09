@@ -265,8 +265,13 @@ void setup(void)
       tft.drawRect(0, barY, screenW, BAR_HEIGHT, TFT_LIGHTGREY);
       // DRAW 150 bar mark
       int x150 = (int)((150.0 / BAR_MAX) * (float)(screenW - 2) + 0.5) + 1;
+      int xunclamped = (int)((PRESSURE_UNCLAMPED / BAR_MAX) * (float)(screenW - 2) + 0.5) + 1;
+      int xover = (int)((PRESSURE_OVER / BAR_MAX) * (float)(screenW - 2) + 0.5) + 1;
       tft.fillTriangle(x150 - 3, barY - 11, x150 + 3, barY - 11, x150, barY-1, TFT_YELLOW);
       tft.fillTriangle(x150 - 3, barY + BAR_HEIGHT + 11, x150 + 3, barY + BAR_HEIGHT + 11, x150, barY + BAR_HEIGHT +1, TFT_YELLOW);
+      // Draw CLAMPED marker
+      tft.drawLine(xunclamped, barY - 1, xover, barY -1, TFT_YELLOW);
+      tft.drawLine(xunclamped, barY + BAR_HEIGHT + 1, xover, barY + BAR_HEIGHT + 1, TFT_YELLOW);
     }
 
     targetTime = millis() + 100;
@@ -366,20 +371,28 @@ void loop()
     xpos += tft.drawFloat(min_pressure, 1, xpos, ypos, 2); // Draw rounded number and return new xpos delta for next print position
     xpos += tft.drawString(" bar   ",  xpos, ypos, 2);
     
-    xpos = 130; ypos = 144;
+    int xposstatus = 130; ypos = 144;
+
     if (pressure < PRESSURE_CLAMPED) {
-      tft.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
-      tft.drawString("CLAMPED          ", xpos, ypos, 4);
+      tft.setTextColor(TFT_BLACK, TFT_GREENYELLOW);
+      xpos = tft.drawString(" CLAMPED ", xposstatus, ypos, 4);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString("         ", xpos+xposstatus, ypos, 4);
     } else if (pressure > PRESSURE_OVER && blink()) {
-      tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.drawString("OVERLOAD        ", xpos, ypos, 4);
-    } else if (pressure >= PRESSURE_UNCLAMPED && pressure <= PRESSURE_OVER && blink()) {
-      tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-      tft.drawString("UNCLAMPED    " , xpos, ypos, 4);
+      tft.setTextColor(TFT_BLACK, TFT_RED);
+      xpos = tft.drawString(" OVERLOAD ", xposstatus, ypos, 4);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.drawString("           ", xpos+xposstatus, ypos, 4);
+    } else if (pressure >= PRESSURE_UNCLAMPED && pressure <= PRESSURE_OVER) {
+      tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+      xpos = tft.drawString(" UNCLAMPED " , xposstatus, ypos, 4);
+      tft.setTextColor(TFT_BLACK, TFT_BLACK);
+      tft.drawString("          " , xpos+xposstatus, ypos, 4);
     } else {
       tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
       tft.drawString("                                  ", xpos, ypos, 4);
     }
+   
   }
 }
 
