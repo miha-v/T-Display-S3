@@ -68,7 +68,7 @@ const float R_BOTTOM = 33000.0f; // ohms
 
 // Sensor mapping: 0..10V -> 0..200 bar
 const float SENSOR_V_MAX = 10.0f; // volts at 200 bar
-const float SENSOR_P_MAX = 200.0f; // bar
+const float SENSOR_P_MAX = 250.0f; // bar
 
 // Write a 16-bit register to ADS1115 (MSB first)
 void ads1115WriteRegister(uint8_t reg, uint16_t value)
