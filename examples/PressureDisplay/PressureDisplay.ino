@@ -1,4 +1,3 @@
-
 /*
   Version 0.5
   PressureDisplay.ino
@@ -389,8 +388,7 @@ void loop()
       tft.setTextColor(TFT_BLACK, TFT_BLACK);
       tft.drawString("          " , xpos+xposstatus, ypos, 4);
     } else {
-      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-      tft.drawString("                                  ", xpos, ypos, 4);
+      tft.fillRect(xposstatus, ypos, 200, 30, TFT_BLACK);
     }
    
   }
